@@ -104,6 +104,7 @@ def get_api_answer(timestamp):
 
 def check_response(response):
     """Проверяет корректность структуры ответа API."""
+    logger.debug('Началась проверка ответа сервера.')
     if not isinstance(response, dict):
         raise TypeError(
             'Некорректный тип данных '
@@ -111,7 +112,7 @@ def check_response(response):
         )
 
     if 'homeworks' not in response:
-        raise KeyError('Отсутствует ключ homeworks: ')
+        raise KeyError('Отсутствует ключ homeworks')
 
     if not isinstance(response['homeworks'], list):
         raise TypeError(
@@ -127,10 +128,12 @@ def check_response(response):
             f'Некорректный тип данных current_date: '
             f'{type(response["current_date"]).__name__}',
         )
+    logger.debug('Ответ сервера успешно прошёл проверку.')
 
 
 def parse_status(homework):
     """Формирует сообщение об изменении статуса домашней работы."""
+    logger.debug('Началась проверка статуса домашней работы.')
     if 'homework_name' not in homework:
         raise KeyError('Отсутствует ключ homework_name')
 
@@ -145,6 +148,7 @@ def parse_status(homework):
     homework_name = homework['homework_name']
     verdict = HOMEWORK_VERDICTS[status]
 
+    logger.debug('Статус домашней работы успешно проверен.')
     return (
         f'Изменился статус проверки работы "{homework_name}". {verdict}'
     )
