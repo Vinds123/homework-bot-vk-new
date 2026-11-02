@@ -3,6 +3,7 @@ import os
 import random
 import sys
 import time
+from http import HTTPStatus
 
 import requests
 import vk_api
@@ -19,7 +20,7 @@ logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler(sys.stdout)
 logger.addHandler(handler)
 formatter = logging.Formatter(
-    '%(asctime)s, %(levelname)s, %(message)s',
+    '%(asctime)s, %(name)s, %(levelname)s, %(message)s, %(filename)s',
 )
 handler.setFormatter(formatter)
 
@@ -37,45 +38,66 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверяет наличие обязательных токенов окружения."""
-    if not VK_TOKEN:
-        logger.critical('Не найден VK токен.')
-        raise Exception('Не найден VK токен.')
-
-    if not PRACTICUM_TOKEN:
-        logger.critical('Не найден Практикум токен.')
-        raise Exception('Не найден Практикум токен.')
-
-    if not VK_USER_ID:
-        logger.critical('ID клиента не найдено.')
-        raise Exception('ID клиента не найдено.')
+    tokens = [
+        name for name, token in
+        (
+            ('VK_TOKEN', VK_TOKEN),
+            ('PRACTICUM_TOKEN', PRACTICUM_TOKEN),
+            ('VK_USER_ID', VK_USER_ID),
+        ) if not token
+    ]
+    if not tokens:
+        return True
+    message = ' '.join(tokens)
+    logger.critical(f'Отсутствует токен: {message}')
+    return False
 
 
 def send_message(vk, message):
     """Отправляет сообщение пользователю VK."""
-    vk.messages.send(
-        user_id=VK_USER_ID,
-        message=message,
-        random_id=random.randint(0, 100000),
-    )
-    logger.debug('Сообщение успешно отправлено.')
+    try:
+        vk.messages.send(
+            user_id=VK_USER_ID,
+            message=message,
+            random_id=random.randint(0, 100000),
+        )
+        logger.debug('Сообщение успешно отправлено.')
+        return True
+    except Exception as error:
+        logger.error(
+            f'Произошла ошибка при отправке сообщения: {error}',
+        )
+        return False
 
 
 def get_api_answer(timestamp):
     """Получает ответ от API Практикума."""
+    params = {'from_date': timestamp}
     try:
+        logger.debug(
+            'Начинается отправка API запроса. '
+            f'По адресу: {ENDPOINT}. Параметры запроса: {params}',
+        )
         response = requests.get(
             ENDPOINT,
-            params={'from_date': timestamp},
+            params=params,
             headers=HEADERS,
         )
     except requests.RequestException as error:
-        logger.error(f'Ошибка при запросе к API: {error}')
-        return None
+        raise ConnectionError(
+            f'Ошибка при запросе к API: {error}. '
+            f'Адрес, на который отправляли запрос: {ENDPOINT}. '
+            f'Параметры запроса: {params}.',
+        )
 
-    if response.status_code != 200:
-        raise requests.HTTPError(
+    if response.status_code != HTTPStatus.OK:
+        raise ValueError(
             f'Код ответа API: {response.status_code}',
         )
+    logger.debug(
+        f'Запрос к API успешно завершен. '
+        f'По адресу: {ENDPOINT}. С параметрами: {params}',
+    )
 
     return response.json()
 
@@ -83,26 +105,28 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверяет корректность структуры ответа API."""
     if not isinstance(response, dict):
-        logger.error('Некорректный тип данных')
-        raise TypeError('Некорректный тип данных')
+        raise TypeError(
+            'Некорректный тип данных '
+            f'{type(response).__name__}',
+        )
 
     if 'homeworks' not in response:
-        logger.error('Отсутствует ключ homeworks')
-        raise KeyError('Отсутствует ключ homeworks')
-
-    if 'current_date' not in response:
-        logger.error('Отсутствует ключ current_date')
-        raise KeyError('Отсутствует ключ current_date')
+        raise KeyError('Отсутствует ключ homeworks: ')
 
     if not isinstance(response['homeworks'], list):
-        logger.error('Некорректный тип данных(homeworks)')
-        raise TypeError('Некорректный тип данных(homeworks)')
+        raise TypeError(
+            'Некорректный тип данных(homeworks) '
+            f'{type(response["homeworks"]).__name__}',
+        )
 
-    if not isinstance(response['current_date'], int):
-        logger.error('Некорректный тип данных(current_date)')
-        raise TypeError('Некорректный тип данных(current_date)')
-
-    return response
+    if (
+        'current_date' in response
+        and not isinstance(response["current_date"], int)
+    ):
+        raise TypeError(
+            f'Некорректный тип данных current_date: '
+            f'{type(response["current_date"]).__name__}',
+        )
 
 
 def parse_status(homework):
@@ -128,29 +152,40 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if not check_tokens():
+        raise SystemExit('Ошибка запуска: проверьте переменные окружения.')
+
     timestamp = int(time.time())
 
     # Создаем сессию для бота
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
 
+    last_departures = None
+
     while True:
         try:
             response = get_api_answer(timestamp)
-            homeworks = check_response(response)['homeworks']
+            check_response(response)
+            homeworks = response['homeworks']
 
             if not homeworks:
                 logger.debug('Нет новых статусов домашних работ.')
+            else:
+                message = parse_status(homeworks[0])
+                if last_departures != message:
+                    if send_message(vk, message):
+                        last_departures = message
 
-            for homework in homeworks:
-                message = parse_status(homework)
-                send_message(vk, message)
-            timestamp = response['current_date']
+            timestamp = response.get('current_date', int(time.time()))
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
+            if last_departures != message:
+                if send_message(vk, message):
+                    last_departures = message
             logger.error(message)
-        time.sleep(RETRY_PERIOD)
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
