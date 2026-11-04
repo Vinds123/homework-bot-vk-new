@@ -46,11 +46,9 @@ def check_tokens():
             ('VK_USER_ID', VK_USER_ID),
         ) if not token
     ]
-    if not tokens:
-        return True
-    message = ' '.join(tokens)
-    logger.critical(f'Отсутствует токен: {message}')
-    return False
+    if tokens:
+        logger.critical(f"Отсутствует токен: {' '.join(tokens)}")
+    return tokens
 
 
 def send_message(vk, message):
@@ -73,11 +71,11 @@ def send_message(vk, message):
 def get_api_answer(timestamp):
     """Получает ответ от API Практикума."""
     params = {'from_date': timestamp}
+    logger.debug(
+        'Начинается отправка API запроса. '
+        f'По адресу: {ENDPOINT}. Параметры запроса: {params}',
+    )
     try:
-        logger.debug(
-            'Начинается отправка API запроса. '
-            f'По адресу: {ENDPOINT}. Параметры запроса: {params}',
-        )
         response = requests.get(
             ENDPOINT,
             params=params,
@@ -119,15 +117,6 @@ def check_response(response):
             'Некорректный тип данных(homeworks) '
             f'{type(response["homeworks"]).__name__}',
         )
-
-    if (
-        'current_date' in response
-        and not isinstance(response["current_date"], int)
-    ):
-        raise TypeError(
-            f'Некорректный тип данных current_date: '
-            f'{type(response["current_date"]).__name__}',
-        )
     logger.debug('Ответ сервера успешно прошёл проверку.')
 
 
@@ -156,7 +145,7 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    if not check_tokens():
+    if check_tokens():
         raise SystemExit('Ошибка запуска: проверьте переменные окружения.')
 
     timestamp = int(time.time())
@@ -177,9 +166,8 @@ def main():
                 logger.debug('Нет новых статусов домашних работ.')
             else:
                 message = parse_status(homeworks[0])
-                if last_departures != message:
-                    if send_message(vk, message):
-                        last_departures = message
+                if send_message(vk, message):
+                    last_departures = message
 
             timestamp = response.get('current_date', int(time.time()))
         except Exception as error:
